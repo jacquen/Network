@@ -268,4 +268,372 @@
   + `spanning-tree [vlan vlan-id] hello-time xxx`
   + `spanning-tree [vlan vlan-id] forward-time xxx`
   + `spanning-tree [vlan vlan-id] mag-age xxx`
-  +   
+
+#### RSTP(802.1W)
+
+1. 端口状态
+   1. 丢弃
+   2. 学习
+   3. 转发
+2. 端口角色
+   1. 根端口
+   2. 指定端口
+   3. 替代端口
+   4. 备份端口
+   5. 禁用端口
+3. RSTP收敛过程中,耗费的时间仅仅是BPDU从Root泛洪到网络末端的时间,不受任何Timer的限制,直接绕过两个转发时间.因此收敛速度更快
+4. 配置RSTP模式 `(config)#spanning-tree mode ?`
+
+### 三层交换
+
+#### CAM和TCAM
+
+1. CAM: content addressable memory table内容可寻址内存
+   1. 查表是目的MAC与CAM表中的MAC需要完全匹配
+2. TCAM是路由模块或者路由器用于三层转发是所查的表
+   1. **最长匹配原则**
+
+#### VLAN间路由
+
+##### 单臂路由
+
+1. 配置方法
+
+```shell
+int f0/0
+no shut
+
+int e0/0.10
+encapsulation dot1q 10
+ip add 192.168.10.254 255.255.255.0
+no shut
+
+inte0/0.20
+encapsulation dot1q 20
+ip add 192.168.20.254 255.255.255.0
+no shut
+
+```
+
+##### SVI (Switch virtual interfaces)
+
++ 二层接口:access模式, trunk模式
++ 三层接口: 路由接口(no switchport或者routed port), SVI接口
+
+### 三层交换机的基本配置
+
++ 配置
+
+```shell
+
+ip routing
+!开启三层交换机的路由功能
+
+vlan10
+name class
+!创建vlan
+
+int vlan 10
+ip address 192.168.10.254 255.255.255.0
+no shut
+!配置SVI
+
+int fa0/1
+no switchport
+ip add 192.168.255.1 255.255.255.0
+no shut
+!配置三层接口
+
+ip route 0.0.0.0 0.0.0.0 192.168.255.2
+!配置静态路由
+```
+
+### 网关冗余技术
+
+#### GLBP(Gateway load balance protocl)
+
+1. 最多支持4台设备, 这些网关被称为AVF(active virtual forwarder)
+2. GLBP自动管理虚拟MAC,这些功能由AVG(active virtual gateway实现)
+
+```shell
+SW4(config-if)#glbp 1 ?
+  authentication  Authentication method
+  client-cache    Client cache
+  forwarder       Forwarder configuration
+  ip              Enable group and set virtual IP address
+  load-balancing  Load balancing method
+  name            Redundancy name
+  preempt         Overthrow lower priority designated routers
+  priority        Priority level
+  timers          Adjust GLBP timers
+  weighting       Gateway weighting and tracking
+
+SW4:
+interface Vlan10
+ ip address 10.1.1.252 255.255.255.0
+ glbp 1 ip 10.1.1.254
+ glbp 1 priority 120
+ !优先级高的成为AVG
+ glbp 1 preempt
+ !开启抢占
+
+SW3:
+interface Vlan10
+ ip address 10.1.1.253 255.255.255.0
+ glbp 1 ip 10.1.1.254
+ glbp 1 preempt
+end
+
+
+!查看命令
+
+show GLBP
+
+!load-balance的方式
+
+SW4(config-if)#glbp 1 load-balancing ?
+ !同一源MAC地址被分配到固定的AVG
+  host-dependent  Load balance equally, source MAC determines forwarder choice
+  !默认的load-balance的方式
+  round-robin     Load balance equally using each forwarder in turn
+  !配合GLBP 1 weight使用决定每台AVG所分担的负载
+  weighted        Load balance in proportion to forwarder weighting
+
+```
+
++ weighted扩展
+
+```shell
+interface Vlan10
+ ip address 10.1.1.252 255.255.255.0
+ glbp 1 ip 10.1.1.254
+ glbp 1 priority 120
+ glbp 1 load-balancing weighted
+ ! 当weight低于85,则不在分担任何流量,只有流量再高于105,才会转发
+ glbp 1 weighting 110 lower 85 upper 105
+ ! track失败,weight减去一个值
+ glbp 1 weighting track 10 decrement 10
+ glbp 1 weighting track 20 decrement 20
+```
+
+#### HSRP(hot standby router protocol)
+
++ standby routers listen for hellos from active router, defaulting to a 3-second hello interval and 10-second dead interval
++ 虚拟MAC 0000.0C07.ACxx, xx代表十六进制的HSRP组
++ 支持明文或MD加密
++ 举例:
+
+```shell
+!设置HSRP track
+track 13 interface Serial0/0.1 line-protocol
+! Next, on Router R1, two HSRP groups are configured. R1 has a higher priority
+! in group 21, with R2 having a higher priority in group 22. R1 is set to preempt
+! in group 21, as well as to track interface s0/0.1 for both groups.
+interface FastEthernet0/0
+ip address 10.1.1.1 255.255.255.0
+standby 21 ip 10.1.1.21
+continues
+standby 21 priority 105
+standby 21 preempt
+standby 21 track 13
+standby 22 ip 10.1.1.22
+standby 22 track 13
+
+!debug命令
+debug HSRP
+```
+
++ track参考: [思科 Enhanced Object tracking](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/ipapp/configuration/15-mt/iap-15-mt-book/iap-eot.html)
+
+#### VRRP(virtual router redundancy protocol)
+
+### Etherchannel
+
++ Etherchannel协议
+  + PAgP 思科专有
+  + LCAP IEEE802.3AD
++ PaGP的模式
+  + On
+  + Desirable
+  + Auto
+  + Off
++ 基本配置
+
++ 二层EtherChannel
+
+```shell
+
+int rang e0/1-2
+switchport
+switchport trunk encapsulation dot1q
+switchport mode trunk
+channel-protocol pagp/lacp !此命令在模拟器下会被拒绝
+channel-group 1 mode descirable/on/auto
+
+!查看命令
+show etherchannel 1 summary
+```
+
++ 三层EtherChannel
+
+```shell
+
+int rang e0/1-2
+no switchport
+no ip address
+channel-group 1 mode descirable/on/auto
+no shutdown
+
+int port-channel 1
+ip add 172.16.10.1 255.255.255.0
+no sh
+
+!查看命令
+show etherchannel 1 summary
+```
+
++ 配置port-channel load balance的类型 `port-channel load-balance ?`
+
+### Port-security
+
++ 安全地址表项可以通过三种方式学到
+  + 动态学习到(secure dynamic)
+  + 手工在接口下配置(secure configured)
+  + sticky MAC address(secure sticky)
++ 默认最大允许的安全MAC数量 1
++ 惩罚模式 shutdown,同时发送一个SNMP trap
++ 配置举例
+
+  ```shell
+    int fa0/1
+    switchport
+    switchport mode access
+    swithcport access vlan 10
+    switchport port-security
+    switchport violation {protect|restrict|shutdown}
+    switchport port-security maximum 2 vlan 10,20,30
+    switchport port-secuirty maca-address xxxx [vlan id]
+
+    switchport port-secuirty mac-address sticky
+    switchport port-security aging type {absolute|inactivity}
+    switchport port-security aging time xx(mins)
+
+    !查看命令
+    show port-scurity int e0/1
+    show port-security  address
+
+  ```
+
++ 被惩罚后的回复
+  + 全局配置: err-disable recovery psecure-violation
+  + 手工shut,no shut
+
+### DHCP
+
++ UDP协议,端口67及68
++ BootPC: 67(客户端端口号), BootPS:68(服务端端口号)
++ 四个包
+  + DHCP discovery
+  + DHCP offer
+  + DHCP request
+  + DHCP ACk
++ DHCP配置
+
+```shell
+  service dhcp
+
+  ip dhcp excluded-address 10.1.1.1 10.1.1.10
+  
+  ip dhcp pool xxx
+  network 10.1.1.0 255.255.255.0
+  default-router 10.1.1.254
+
+  !在SVI接口上配置DHCP server中继
+  ip helper-address 10.1.1.1
+```
+
++ 查看命令
+  + `show ip dhcp database`
+  + `show ip dhcp binding`
+  + `show ip dhcp statis`
+  + `debug dhcp detail`
+
++ dhcp手工绑定IP
+
+```shell
+ip dhcp pool WPRINTER1
+   host 10.85.3.20 255.255.255.0
+   hardware-address ac:3f:a4:7a:66:9e
+```
+
+#### DHCP snooping
+
++ 将连接合法DHCP服务器的接口配置为Trust,只有trust接口上收到来自DHCP Server的报文
++ 例子
++ ![Image_2018-12-10_15-33-56](./assets/Image_2018-12-10_15-33-56.png)
+  
+配置
+
++ Server1
+
+```shell
+ip dhcp pool vlan10
+ network 192.168.10.0 255.255.255.0
+ default-router 192.168.10.254
+
+interface Ethernet0/1
+ ip address 192.168.100.1 255.255.255.0
+
+no ip routing
+ip default-gateway 192.168.100.254
+```
+
++ SW2
+
+```shell
+vlan 10,100
+
+interface Vlan10
+ ip address 192.168.10.254 255.255.255.0
+ ip helper-address 192.168.100.1
+!
+interface Vlan100
+ ip address 192.168.100.254 255.255.255.0
+!
+interface Ethernet0/0
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+!
+interface Ethernet0/1
+ switchport access vlan 100
+```
+
++ SW1
+
+```shell
+vlan  10
+ip dhcp snooping
+ip dhcp snooping vlan 10
+
+no ip dhcp snooping informaiton option
+!不写入option82
+
+interface Ethernet0/0
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ ip dhcp snooping trust
+!在上联接口配置Snooping trusk
+
+interface Ethernet0/1
+ switchport access vlan 10
+!
+
+```
+
++ 还有一种解法就是在SW1上启用option82 `ip dhcp snooping informaiton option`,但是在SW2上要配置如下
+  + `ip dhcp relay information trust_all`
+  + 或者`interface vlan 10/ ip hdcp relay informatoin trusted`
+
++ **总结**
+  + 启用DHCP Snooping可以在边界交换机的uplink上开启`ip dhcp snooping trust`,并且使用命令`no ip dhcp snooping informaiton option`关闭option82的发送
+  + 或者边界交换机发送option82,但是在核心上开启`ip dhcp relay information trust_all`,或者vlan interface上设置`ip hdcp relay informatoin trusted`

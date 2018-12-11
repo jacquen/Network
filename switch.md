@@ -636,4 +636,4 @@ interface Ethernet0/1
 
 + **总结**
   + 启用DHCP Snooping可以在边界交换机的uplink上开启`ip dhcp snooping trust`,并且使用命令`no ip dhcp snooping informaiton option`关闭option82的发送
-  + 或者边界交换机发送option82,但是在核心上开启`ip dhcp relay information trust_all`,或者vlan interface上设置`ip hdcp relay informatoin trusted`
+  + 或者边界交换机发送option82,但是在核心上开启`ip dhcp relay information trust_all`,或者vlan interface上设置`ip dhcp relay informatoin trusted`

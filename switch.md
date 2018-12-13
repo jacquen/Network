@@ -105,7 +105,8 @@
    3. CFI,1bit,表示MAC地址是否为经典格式
 4. Native VLAN
     1. native vlan不打标签
-    2. navtive VLAN两端必须匹配
+    2. navtive VLAN两端必须匹配,Cisco在trunk口上打标
+       1.access口碰到带标签的数据, 如果VLAN标签一致,就剥除VLAN头部,如果不一致,就丢弃
     3. 默认native VLAN是VLAN 1
     4. 配置命令`switchprot trunk native vlan xxx`
     5. 检测命令`show interface trunk`
@@ -124,7 +125,20 @@
     !关闭DTP
     switchport nonegotiate
     switchport trunk allow vlan 10,20
+
+    !switchport trunk allow vlan add/remove ?
     ```
+7. 最佳实践
++ 不使用端口
+  + 关闭
+  + 划为ACCESS
+  + 划到不使用VLAN
+  + 不使用端口的Native VLAN配置为一个未使用的VLAN
++ Trunk
+  + trunk mode on参数配置Trunk端口,禁用Trunk协商
+  + 将Trunk端口native VLAN配置为一个未使用的VLAN
+  + 配置Trunk端口的允许VLAN 列表
+  + Native VLAN 打标记 VLAN dot1q tag native
 
 #### MTU问题
 
@@ -320,7 +334,7 @@ no shut
 + 二层接口:access模式, trunk模式
 + 三层接口: 路由接口(no switchport或者routed port), SVI接口
 
-### 三层交换机的基本配置
+#### 三层交换机的基本配置
 
 + 配置
 
@@ -447,6 +461,24 @@ debug HSRP
 
 #### VRRP(virtual router redundancy protocol)
 
++ VRRP 配置
+
+  ```shell
+    track 90 interface fa0/24 line-protocol
+    inter vlan 10
+    ip add 10.1.10.2 255.255.255.0
+    vrrp 1 ip 10.1.10.1
+    vrrp 1 priority 10
+    vrrp 1 timer advertise msec 500
+    vrrp 1 authentication md5 keystring xyz123
+    vrrp track 90 decrement 20
+  ```
+
+#### 检测命令
+
+`show standby brief`
+`show sstandby
+
 ### Etherchannel
 
 + Etherchannel协议
@@ -528,7 +560,7 @@ show etherchannel 1 summary
   + 全局配置: err-disable recovery psecure-violation
   + 手工shut,no shut
 
-### DHCP
+### DHCP及DHCP Snooping
 
 + UDP协议,端口67及68
 + BootPC: 67(客户端端口号), BootPS:68(服务端端口号)
@@ -634,6 +666,77 @@ interface Ethernet0/1
   + `ip dhcp relay information trust_all`
   + 或者`interface vlan 10/ ip hdcp relay informatoin trusted`
 
++ 方法三:
+  + SW1
+    ```shell
+    !不写入option82
+    no ip dhcp snooping information option
+    ip dhcp snooping
+
+    interface Ethernet0/0
+    switchport trunk encapsulation dot1q
+    switchport mode trunk
+    ip dhcp snooping trust
+    !
+    ```
+  + SW2(核心上也开始IP dhcp snooping, 但是**不能开启**ip dhcp snooping vlan 10,100,否则客户端获取不到IP)
+    ```shell
+    ip dhcp snooping
+    interface Ethernet0/0
+    switchport trunk encapsulation dot1q
+    switchport mode trunk
+    ip dhcp snooping trust
+    !
+    interface Ethernet0/1
+    switchport access vlan 100
+    ip dhcp snooping trust
+    !
+    ```
+
 + **总结**
   + 启用DHCP Snooping可以在边界交换机的uplink上开启`ip dhcp snooping trust`,并且使用命令`no ip dhcp snooping informaiton option`关闭option82的发送
-  + 或者边界交换机发送option82,但是在核心上开启`ip dhcp relay information trust_all`,或者vlan interface上设置`ip dhcp relay informatoin trusted`
+  + 或者边界交换机发送option82,但是在核心上开启`ip dhcp relay information trust_all`(不插入opiton82),或者vlan interface上设置`ip dhcp relay informatoin trusted`
+  + 核心上可以开启`ip dhcp snooping`,连接DHCP和连接下游交换的的接口设置`ip dhcp snooping trust`, 但是**不能**开启`ip dhcp snooping vlan 10,100`
+  + ip dhcp snooping端口速率限制`ip dhcp snooping limit rate ?`
+  + 参考: 红茶三杯的switch.PDF page 104
+
+### DAI (Dynamic ARP Inspection)
+
++ ARP基于广播
++ ARP相应报文无需确认即可直接发送
++ 没有确认机制
++ Invalid ARP
+  + MAC地址全为零(windows主机),或者No completed(网络设备)
+  + 产生的原因: 发送ARP Request后,为接收ARP Reply做准备
++ Gratuitous ARP: 用于IP冲突检测,sender IP和target IP一致
++ **DAI依赖于DHCP Snooping**
++ 基本配置
++ `ip ARP inspection vlan {vlan_ID|vlan_range}`
++ 接口配置`ip ARP inspection trust`
++ 接入层交换机配置
+
+  ```shell
+  ip arp inspection vlan 10
+  int e0/0
+  ip arp inpsenction trust
+  ```
+
++ 手工添加DHCP Snooping绑定表项的命令,应用于静态IP的端口`ip dhcp snooping binding xxxx.xxxx.xxxx(MAC) vlan x ip-address interface gi1/0/1 expiry xxx`
++ 或者添加ARP ACL
+
+```shell
+arp access-list ccie
+permit ip host 192.168.10.111 mac host xxxx.xxxx.xxxx
+ip arp inspection filter ccie vlan 10
+```
+
++ arp errdisable恢复
+
+```shell
+errdisable recovery cause arp-inspection
+errdisable recovery interval 30
+int e0/1
+ip arp inspenction limit rate 10
+
+```
+

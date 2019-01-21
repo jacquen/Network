@@ -404,7 +404,118 @@ BGP next-hop规则如下
 ### Local-Preference
 
 - 只能在IBGP邻居直接传递,不会传递给其他EBGP邻居
-- local-pref影响AS内的选路
-- 缺省100
+- local-pref***影响AS内的选路***
+- 缺省100 (**选大的LP值**)
 - 当一个AS收到去往同一目的地,但经过两个AS的路由, 则根据两条路由的local-pref值
 - 在路由协议下配置`bgp default local-preference 500` 修改默认的LP值
+- 或者可以通过route-map `set local-preference 101`来修改某条具体路由的local-preference值
+
+### MED
+
+- 非传递,用于***影响AS之间路由***
+- 默认情况下, 只比较来自同一邻居AS的BGP路由的MED值,就是说如果同一个目的地的两条路由来自不同的AS，则不进行MED值的比较。换句话说，默认对于多条路径，只有在AS_SEQUENCE中的第一个AS相同的情况下，才比较MED；任何打头的AS_CONFED_SEQUENCE都将被忽略。MED只是在直接相连的自治系统间影响业务量，而**不会跨AS传递**
+- MED设置方式
+  - IGP引入BGP时通过Route-map进行设置
+  - 对BGP Peer应用in/out方向的route-map
+  - network或redistribute方式将IGP路由引入BGP时, MED将继承IGP路由的Metric(直连和静态路由metric为0)
+  - aggregate-address方式引入的路由, MED为空
+- MED值的传递
+  - MED值会在IBGP之间传递
+  - 本地始发(network或redistribute)的,则携带MED值发送给EBGP peer(如果为空, 则置0)
+  - 如果是层其他BGP peer学过来, 则MED不会被传出本AS
+- MED值继承IGP的Metric
+  - network/redistribute本地从IGP路由协议学习到的路由进BGP，MED值继承IGP协议中的metric
+  - network/redistribute本地直连接口的网段进BGP，MED值为0；network/redistribute本地静态路由进BGP，MED值为0
+- 其他配置命令
+  - `bgp always-compare-med`
+  - `bgp bestpath med missing-as-worst`
+  - `set metric-type internal`
+  - `bgp bestpath med confed`选路时,路由器只比较所有带有AS_CONFD_SEQ属性的路由条目
+  - `bgp deterministic-med`如果这条命令和`bgp always-compare-med`同时使用下面这种情况会2,3同AS内先比较,2的MED小所以优选, 2再和1比较,由于打开了`always-compare-med`所以比较MED,2的MED小,所以2为最佳路径
+  ![Image_2019-01-18_09-42-20.png](.\assets\Image_2019-01-18_09-42-20.png)
+- `default-metric x` 修改MED值的缺省值
+
+### Community
+
+- 可选传递属性,用于简化路由策略的执行
+- 是一组4个8位组的数值,RFC1997规定前2B表示AS豪, 后2B表示基于管理项目的设置的标示符, 格式AA:NN, `ip bgpcoummunity new-format`改为RFC新格式
+- 需要配置`neighbor x.x.x.x send-community`
+- 在route-map中set community
+
+  ```
+route-map test
+set community ?
+  <1-4294967295>  community number
+  aa:nn           community number in aa:nn format
+  gshut           Graceful Shutdown (well-known community)
+  internet        Internet (well-known community) //默认所有路由都属于该团体
+  local-AS        Do not send outside local AS (well-known community) //只能在本AS内传递(如果定义了联邦,则只能在本联邦成员AS内传递)
+  no-advertise    Do not advertise to any peer (well-known community)  //不通告给任何BGP邻居
+  no-export       Do not export to next AS (well-known community)  //不通告给任何EBGP邻居
+  none            No community attribute
+
+  ```
+- 例子
+
+  ```
+  ip prefix 11 permit 11.11.11.0/24
+  route-map test permit 10
+    match ip address prefix-list 11
+    set community 100:11
+  router bgp 100
+    network 11.11.11.0 mask 255.255.255.0
+    neighbor 10.1.12.2 remote-as 200
+    neighbor 10.1.12.2 send-Community
+    neigbhor 10.1.12.2 route-map test out
+
+  ```
+- 使用的时候使用`ip community-list`匹配community值
+
+  ```
+  ip community-list 11 permit 100:11
+  route-map test permit 10
+    match community 11
+    set community no-export additive
+  route bg 200
+    neighbor 10.1.23.3 remote-as 300
+    neighbor 10.1.23.3 send-community
+    neighbor 10.1.23.3 route-map test out
+
+  ```
+- community的逻辑关系
+  - `ip community 11 permit 100:11 no-advertise`同时包含100:11和no-advertise
+  - 下面是或的关系 
+    ```
+    ip community-list 11 permit 100:11
+    ip community-list 11 permit no-exprot
+   ```
+- 删除community
+
+  ```
+  ip community-list 1 permit no-exprot
+  route-map test permit 10
+    set community-list 1 delet
+  ```
+- cost community
+  - 使用`set extcommunity cost x`在route-map去设置
+  - 使用`neighbor send-community`的时候要加上extend关键字
+    ```
+    ip prefix 100 permit 100.100.100.0/24
+    route-map COST1 permit 10
+      match ip address prefix-list 100
+      set extcommunity cost 1 10
+    route-map COST2 permit 10
+      set extcommunity cost 1 5
+    router bgp 123
+        neighbor 1.1.1.1 route-map COST1 in
+        neighbor 3.3.3.3 route-map COST2 in
+    ```
+  -  按照下面这样配置,COST的比较会超越weight,成为最优选比较原则
+    ```
+    route-map COST permit 10
+      match ip address prefix-list 100
+      set extcommunity cost pre-bestpath 1 10
+    ```
+### Atomic_Aggregate和Aggregate
+
+- Atomic_Aggregate公认自决属性, 可选可传递

@@ -519,3 +519,74 @@ set community ?
 ### Atomic_Aggregate和Aggregate
 
 - Atomic_Aggregate公认自决属性, 可选可传递
+- 当上游路由器都带相同的明细路由, 而汇总路由器汇总时不带AS-set 关键字时, 下游路由器接收到的汇总路由是带atomic-aggregate属性的, 会明确指出该汇总路由是由那台路由器产生的. 
+- 而当汇总路由器汇总时带上AS-set关键字是, 汇总路由就继承了明细的AS-Path属性, 这时汇总路由就不带Atomic_Aggregate的属性了
+
+### Originator_ID 和 Cluster_list
+
+- AS_path属性在AS内部是不会发生变化的(只有在离开本AS才会发生变化)
+- 这两个属性是反射器使用的可选非传递属性
+- Originator_ID指的是本地AS中路由器发起方的IBGP routerID
+- Cluster_list是一串路由传递所进过的路由反射簇的ID
+
+### Weight
+
+- 思科私有, 0-65535
+- 如果是学过来的, 默认是0, 本地network,重发布直连,静态路由, 本地汇总产生的路由weight是32768
+
+## BGP配置
+
+- `router bgp as`
+- `network xxx mask yyy route-map zzz`, network宣告的是路由, 子网掩码必须和路由表中的相匹配
+- `neighbor x.x.x remote-as yy`
+- `neighbor x.x.x ebgp multi-hop 2`
+- `neighbor x.x.x update source l0`
+
+### BGP重发布
+
+1. BGP重发布到IGP
+  - 默认不重发布IBGP路由,只重发布EBGP路由, 需要使用`bgp redistribute-internal`来让IBGP路由顺利被重发布
+  - ***MPLS VPN***的PE没有这个限制
+2. OSPF重发布进BGP
+
+```
+router bgp x
+  redistribute ospf 1
+```
+- 默认情况,只会讲OSPF中的O, O IA的路由重发布进BGP
+- `redistribute ospf 1 match external 1 external 2`只重发布OSPF外部路由E1,E2进BGP
+- `redistribute ospf 1 match internal 1 external 2`只重发布OSPF内部路由,外部路由E1进BGP
+- `redistribute ospf 1 match nssa-external 1 nssa-external 2`只重发布OSPF NSSA路由进BGP
+
+3. 不同协议的重分布时:
+  - 任何协议重分布进RIP, 必须加Metric
+  - 任何协议重分布EIGRP要加5个K
+  - 任何协议重分布进OSPF不需要加
+  - 任何协议重分布进BGP不需要加
+  - 总结: ***分布进入距离矢量协议需要手工添加metric值***
+
+### BGP PeerGroup配置
+
+```
+router bgp 1234
+  neighbor IBGP_peers peer-group
+  neighbor IBGP_peers remote-as 1234
+  neighbor IBGP_peers update-source l0
+  neighbor IBGP_peers password cisco
+  neighbor IBGP_peers send-community
+
+  neighbor 2.2.2.2 peer-group IBPG_peers
+  neighbor 3.3.3.3 peer-group IBPG_peers
+```
+
+### BGP查看和验证
+
+1. `show ip bgp`
+2. `show ip bgp summary`
+3. `show ip bgp rib-failure`
+4. `show ip bgp x.x.x.x`
+5. `show tcp brief`
+6. `show ip bgp neighbor x.x.x.x received-routes`
+7. `show ip bgp neighbors x.x.x.x routes`
+8. `show ip bgp neighbors x.x.x.x advertised-routes`
+

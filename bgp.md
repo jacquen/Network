@@ -582,11 +582,151 @@ router bgp 1234
 ### BGP查看和验证
 
 1. `show ip bgp`
-2. `show ip bgp summary`
+2. **`show ip bgp summary`**
 3. `show ip bgp rib-failure`
-4. `show ip bgp x.x.x.x`
+4. **`show ip bgp x.x.x.x`**
 5. `show tcp brief`
 6. `show ip bgp neighbor x.x.x.x received-routes`
 7. `show ip bgp neighbors x.x.x.x routes`
 8. `show ip bgp neighbors x.x.x.x advertised-routes`
 
+### BGP邻居身份验证
+
+- `neighbor xxx password xxx`
+- MD5身份验证, *并不是加密*
+
+### BGP邻居管理
+
+- `neighbor maximum-prefix xx`
+- `neighbor maximum-prefix xx restart 2 (mins)`
+- `neighbor maximum-prefix 300 90% warning-only (logging to log)`
+- BGP连接重置
+  - `clear ip bgp *`
+  - `clear ip bgp {neighbor-address}`
+  - `clear ip bgp * soft`
+  - `clear ip bgp soft out/in`
+  - `clear ip bgp {neighbor-address} soft in/out`
+- 存储路由更新信息的配置方法, 需要在接收方`router bgp x`下配置
+  - `neighbor x.x.x.x soft-reconfiguration inbound`
+
+## BGP policy accounting
+- 用于计费
+
+```
+! 对30.30.30.0/24的路由设置community
+ip prefix-list 30 permit 30.30.30.0/24
+route-map setComm permit 10
+  match ip address prefix-list 30
+  set community 300:30
+
+ip community-list 30 permit 300:30
+route-map PA permit 10
+  match community 30
+  set traffic-index 30
+
+router bgp 12
+  table-map PA
+  !对来自10.1.23.3设置community
+  neighbor 10.1.23.3 route-map setComm in
+
+!接口设置accounting
+interface fa0/0
+  ip address 10.1.12.2 255.255.255.0
+  bgp-policy accounting input    
+```
+
+- 查看命令`show cef interface s0/0 policy-statistics input`
+
+## BGP选路
+
+| 简写 | 描述                                  | 比较方式               |
+| :-   | :-                                    | :-                     |
+| W    | highest weight                        | 大
+| L    | highest local pref                    | 大
+| L    | local originate route                 | 本地network或aggregate
+| A    | shortest AS path                      | 短
+| O    | origin type                           | (IGP>EGP>? incomplete)
+| M    | smallest MED                          | 小
+| N    | neighbor type                         | prefer Ebgp over IBGP
+| I    | lowest IGP metric to the BGP next hop | 最小的IGP metric
+| M    | Multipath                             | maximum-path 4
+| O    | oldest path (oldest EBGP Neighbor)    | 最老的EBGP邻居
+| R    | Lowest Router ID                      | 最小的router_id
+| C    | shortest Cluster ID                   | RR中最短的路径
+| N    | lowest neighbor address               | 最小的邻居地址
+- WLLA, OMNI,MOR,CN
+
+- BGP multipath配置`maximum-paths [ibgp/ebgp/eibgp] n`
+- 可以进入BGP选路的**先决条件**
+  - BGP路由最优(*>)
+    - 下一跳可达
+    - IGP和BGP路由同步, 如果开启路由同步功能
+    - 入方向的BGP没有过滤
+    - 路由没有被dampend
+
+- BGP路由信息数据库RIB
+  - ADJ-RIBs-IN 来自对等体的,未经处理的消息
+  - Loc-RIB BGP路由器对ADJ-RIBs-IN中的路由使用它的本地路由策略而选择的路由
+  - ADJ-RIBs-OUT 公布给对等体的路由
+
+- BGP非等价负载均衡
+
+  ```
+router bgp 200
+  bgp dmzlink-bw
+  neighbor 10.1.12.1 dmzlink-bw
+  neighbor 10.1.23.3 dmzlink-bw
+  ```
+
+### Weight
+- 只能在in方向使用
+- 几种配置方法
+  -  `neighbor 1.1.1.1 weight 2000`
+  - 方法2
+    ```
+    ip as-path access-list 1 permit _1$ //匹配AS(100,1)及(200,1)
+    ip as-path access-list 1 permit _2$ //匹配AS(100,2)及(200,2)
+    router b 300
+      neighbor R3 filter-list 1 weight 4000
+      neighbor R3 filter-list 2 weight 5000
+
+    ```
+  - 方法3
+
+    ```
+    !匹配路由77.1.1.0
+    access-list 1 permit 77.1.1.0
+    Route-map W
+    match ip address 1
+    set weight 10
+    Route-map W permit 999
+    exit
+    !要大号放行
+
+    router bg 100
+    neighbor 22.1.1.1 route-map W in
+
+    !或者方法2, 后面没有方向,针对R7发生所有路由都修改Weight值
+    router bg 100
+    neighbor 22.1.1.1 weight 10
+
+    ```
+
+## 正则表达式
+
+- 组成
+  - 常规字符
+  - 控制字符
+    - 原子字符(位于常规字符之前或之后,用来限制或扩充常规字符的控制字符或占位字符)
+    - 乘法字符(跟在原子字符或常规字符之后,用来描述它前面字符的重复方式)
+    - 范围字符(限定一个范围)
+- 原子字符
+
+| 符号 | 描述                                              |
+| -    | -                                                 |
+| .    | 匹配任何单个的字符包括空格                        |
+| ^    | 一个字符串的开始
+| \$   | 一个字符串的结束
+| _    | 下划线,匹配任意的一个分割符如^,\$,空格,tab,逗号{}
+| \|   | 管道符,逻辑或
+| \    | 转义符,用来将紧跟其后的控制字符转变为普通字符

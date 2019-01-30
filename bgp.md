@@ -11,6 +11,7 @@
 - BGP是设计在AS之间传递路由的,它的一跳实际就是一个AS
 - BGP是无类路由选择协议,距离矢量路由协议,自动汇总默认关闭
 - BGP有两个管理距离, IBGP学过来的200, EBGP学过来的20
+- BGP的router-id可以用`bgp router-id x.x.x.x`来修改
 
 ## BGP的表
 
@@ -30,14 +31,14 @@
 
 - open
 - keepalive
-- update
 - notification
+- update
 - router-refresh
 
 ## BGP状态机
 
 - idle
-- connect
+- connect (initiate TCP from this)
 - active
 - opensent
 - opencomfirm
@@ -52,6 +53,7 @@
 - neighbor认证
 - AS号声明正确
 - EBGP/IBGP multihop
+- router-id必须不同
 
 ## BPG邻居的建立
 
@@ -134,7 +136,8 @@
 
 ## 路由反射器RR
 
-- RR不修改Next-Hop, AS_Path, Local_Preference和MED,并且增加了Originator和Cluster_list用于防环
+- RR不修改Next-Hop, AS_Path, Local_Preference和MED,并且增加了Originator_ID和Cluster_list用于防环
+  - Originator_ID指的是IBGP内第一个宣告某条路由的Router_ID
 - 如果学习自非client,则反射给所有的client和EBGP邻居
 - 如果学习自client,则反射给所有非client的IBGP邻居和该client以外的所有client
 - 如果学习自EBGP邻居, 则反射给所有的client和非client IBGP邻居
@@ -177,10 +180,10 @@ bgp cluster-id 22.22.22.22
 - 汇总传递的属性
   - summary-only丢失AS_Path属性
   - summary-only as-set
-    - 将收到的所有明细路由的AS好都放在{}中
+    - as-set将收到的所有明细路由的AS号都放在{}中, as-set是无序的
     - Origin: 继承最差的Orign属性
     - Community: 继承所有明细路由的community
-    - MED: 不继承
+    - MED: 不继承,默认为0, 如果在IBGP中汇总, MED值不会再传递给EBGP邻居, 如果需要修改EBGP邻居的MED值, 需要在相邻的出口路由器上再次汇总
     - LP: 取明细路由中LP的最大值
     - Next_hop: 汇总路由为0.0.0.0
 - summary-only会抑制掉所有明细路由,但是配合unsuppress-map使用可以放行部分明细路由
@@ -221,6 +224,7 @@ bgp cluster-id 22.22.22.22
 
 ### set community no-advertise和aggregate结合使用的例子
 ![Image_2019-01-17_11-00-57.png](.\assets\Image_2019-01-17_11-00-57.png)
+
 ```
 R3宣告了192.168.1.0, 2.0同时设置1.0的community属性no-adv
 access-list 1 permit 192.168.1.0
@@ -361,6 +365,10 @@ router bgp 3
 - ?: incomplete
 - e: EGP (已经淘汰)
 - **优选原则**: i>e>?
+- 几个注意点:
+  - 重分布进BGP的IGP的origin code是?(incomplete)
+  - aggregate-address(部分)和default-information originate生成的路由也是?
+  - 如果使用as-set的话, 如果有一个子网的origin code是?,那么汇总的origin code也是?
 
 ### AS-Path
 
@@ -390,10 +398,14 @@ router bgp 3
 
 BGP next-hop规则如下
 1. 如果BGP路由传递自EBGP Peer
+  - EBGP的下一跳必须路由可达
+  - EBGP的TTL=1, 可以使用`neighbor xxx ebgp-mulithop 2`
   - 这条BGP路由的Next-hop就是通告者的接口IP, 直连接口或者loopback接口地址
+  - 可以使用命令`neighbor...next-hop-unchanged`保持不变
 2. 如果路由传递自IBGP邻居, 并描述的是AS外的目的地
   - next-hop始终指向下一个AS(即EBGP Peer的接口IP)
   - 在IBGP AS内保持不变
+  - 可以使用命令`neighbor...next-hop-self`改变
 3. 如果路由传递在IBGP邻居,并由AS内BGP路由器引入
   - 如果是通过Aggregate-address命令注入, 那么next-hop等于执行汇总路由器的更新源IP
   - 如果是通过network或者重发布注入, 那么在注入前该前缀的IGP下一跳将成为BGP的next-hop
@@ -537,7 +549,7 @@ set community ?
 ## BGP配置
 
 - `router bgp as`
-- `network xxx mask yyy route-map zzz`, network宣告的是路由, 子网掩码必须和路由表中的相匹配
+- `network xxx mask yyy route-map zzz`, network宣告的是路由, 子网掩码必须和路由表中的相匹配, 如果只是`network x.x.x.x`则宣告的只是主类路由
 - `neighbor x.x.x remote-as yy`
 - `neighbor x.x.x ebgp multi-hop 2`
 - `neighbor x.x.x update source l0`
@@ -658,7 +670,7 @@ interface fa0/0
 
 - BGP multipath配置`maximum-paths [ibgp/ebgp/eibgp] n`
 - 可以进入BGP选路的**先决条件**
-  - BGP路由最优(*>)
+  - 只有最优路由才能进入BGP路由表(*>)
     - 下一跳可达
     - IGP和BGP路由同步, 如果开启路由同步功能
     - 入方向的BGP没有过滤
@@ -712,6 +724,170 @@ router bgp 200
 
     ```
 
+## BGP 其他特性
+
+### Prefix-list, Access-list, Distrubute-list, policy-list的配合使用
+
+- prefix-list的用法
+
+```<F8>u
+ip prefix-list 11 seq 5 permit 172.16.11.0/24
+route-map test permit 10
+  match ip address prefix-list 11
+  set as-path prepend 600
+!放行别的路由
+route-map test permit 20
+
+router bgp 200
+  neighbor 10.1.23.3 remote-as 300
+  neighbor 10.1.23.3 route-map test out
+```
+- as-path access-list和filter-list的用法
+
+```
+ip as-path access-list 1 deny _600$
+ip as-path access-list 1 permit .*
+router bgp 300
+  neighbor 10.1.23.2 remote-as 200
+  neighbor 10.1.23.2 filter-list 1 in
+
+```
+- as-path access-list和route-map的用法
+
+```
+ip as-path access-list 1 permit _600$
+route-map setComm permit 10
+  match as-path 1
+  set community no-advertise
+route-map setComm permit 20
+router bgp 300
+  neighbor 10.1.23.2 route-map setComm in
+
+```
+- distribute-list
+
+```
+ip prefix-list 11 seq 5 deny 11.11.11.0/24
+ip prefix-list 11 seq 10 permit 0.0.0.0/0 le 32
+router b 100
+  network 11.11.11.0 mask 255.255.255.0
+  distribute-list prefix 11 out
+```
+
+- policy-list
+  - 可以将一组match语句的route-map定义成一个命令列表
+
+```
+ip policy-list as100 permit
+  match as-path 1   //and community 1
+  match community 1
+ip policy-list as 200 permit
+  match as-path 2
+  match community 1
+
+route-map RP permit 10
+  matchi policy-list as100 as200 // or
+  match ip address prefix-list 100
+  set local-preference 300
+```
+
+### advertise-map
+
+- `neighbor x.x.x.x advertise-map xx exist-map xx`
+- `neighbor x.x.x.x advertise-map yyy no-exist-map zzz`
+
+  ```
+ip prefix-list 1 permit 11.11.11.0/24
+ip prefix-list 2 permit 12.12.12.0/24
+route-map RP1 permit 10
+  match ip address prefix-list 1
+route-map RP2 permit 10
+  match ip address prefix-list 2
+router bgp 100
+  neighbor 10.1.12.12 advertise-map RP1 no-exist-map RP2
+! 如果RP2匹配的路由在BGP中存在,则通过RP2, 如果RP2消失, 则通过RP1
+  ```
+### Unsuppress-map
+- 通常在汇总的时候在summary-only后添加
+
+```
+ip prefix-list 1 seq 5 permit 1.1.1.0/24
+route-map test permit 1
+  match ip address prefix-list 1
+router bgp 1
+  neighbor R2 unsuppress-map test
+```
+### BGP remove private-as number
+
+- `neighbor x.x.x.x remote-private-as`
+
+### BGP dual-as, replace-as
+
+- `neighbor 10.1.23.3 local 201 [no-prepend] [replace-as] [dual-as]`
+- no-prepend 向Primary AS的EBGP邻居通告路由时, 不附加secondary AS号
+- no-prepend replace-as: 当路由器向secondaryAS的EBGP邻居发送更新是,用secondaryAS号代替PrimaryAS号
+- no-prepend replace-as dual-as: EBGP对等体既可以使用PrimaryAS也可使用secondaryAS对本地指remote-as
+
+### BGP ORF特性
+
+- 一旦开启了ORF特性,发送端就不发送不需要的路由的
+- 配置
+
+```
+! sender
+router bgp 12
+  address-family ipv4 unicast
+  neighbor 10.1.12.1 capability orf prefix-list send
+  neighbor 10.1.12.1 prefix-list FILTER in
+ip prefix-list FILTER deny 1.1.1.0/24
+ip prefix-list FILTER permit
+
+! recevier
+router bgp 100
+  address-family ipv4 unicast
+  neighbor 10.1.12.2 capability orf prefix-list receive
+```
+### BGP AD值和后门
+
+- `distance bgp x y z` 分别修改EBGP, IBGP,本地network的AD值
+- `network 1.1.1.0 backdoor` 修改了路由为本地路由, AD值变为200, IBGP
+
+### route tag
+
+```
+route-map test per 10
+  set as-path tag
+router bgp 345
+  redis ospf 1 route-map test
+```
+## BGP默认路由
+
+- 方法1 静态默认路由network `ip route 0.0.0.0 0.0.0.0 null0`, router bgp下 `network 0.0.0.0 mask 0.0.0.0`
+- 方法2 `neighbor xxx default-originate`
+- 方法3 有静态默认路由,default-informatoin originate, 重发布静态
+
+```
+ip route 0.0.0.0 null0
+router bgp x
+  default-information originate
+  redistribute static
+```
+
+- 如果本地有默认路由就对BGP邻居发送生成默认路由的例子
+
+  ```
+ip prefix-list def-route seq 5 permit 0.0.0.0/0
+route-map check-default permit 10
+  match ip address prefix-list def-route
+route bgp 123
+  !如果本机有默认路由就对邻居生成一条默认路由
+  neighbor 3.3.3.3 default-originate route-map check-default
+  ```
+
+## BGP关闭
+
+- `neighbor x.x.x.x shutdown`
+
 ## 正则表达式
 
 - 组成
@@ -730,3 +906,15 @@ router bgp 200
 | _    | 下划线,匹配任意的一个分割符如^,\$,空格,tab,逗号{}
 | \|   | 管道符,逻辑或
 | \    | 转义符,用来将紧跟其后的控制字符转变为普通字符
+
+- 乘法符
+
+| 符号 | 描述                         |
+| -    | -                            |
+| *    | 匹配前面的字符0次或多次出现  |
+| +    | 匹配前面的字符一次或多次出现 |
+| ?    | 匹配前面的字符0次或1次出现   |
+
+- 范围字符 []
+  - 在范围内是有^表示排除范围内的字符
+

@@ -763,6 +763,8 @@ route-map setComm permit 20
 router bgp 300
   neighbor 10.1.23.2 route-map setComm in
 
+show ip as-path-access-list 1
+
 ```
 - distribute-list
 
@@ -918,3 +920,165 @@ route bgp 123
 - 范围字符 []
   - 在范围内是有^表示排除范围内的字符
 
+## MPBGP
+
+- MPLS/VPN需要使用MP-IBGP, MPLS需要使用VPNV4, MPLS Labing, extended standard BGP community
+- MPBGP添加了两个可选非传递属性
+  - Multiprotocol Reachable NLRI(包含一系列next-hop information)
+  - Multiprotocol Unreachable NLRI
+  - 具体包括下列属性
+    - address family information
+    - next-hop information
+    - NLRI (network layer reachability information)
+- 配置
+  - MP-BGP激活后, 默认是开启IPV4 unicast routes, 可以使用命令`no bgp default ipv4-unicast`关闭
+  - 必须配合VRF一起使用
+
+```
+hostname R1
+!
+ip vrf VPN_A
+rd 1:100
+route-target export 100:100
+route-target import 100:100
+!
+ip vrf VPN_B
+rd 1:200
+route-target export 100:200
+route-target import 100:200
+!
+interface loopback0
+ip address 194.22.15.2 255.255.255.255
+!
+interface serial0
+ip vrf forwarding VPN_A
+ip address 10.2.1.5 255.255.255.252
+!
+interface serial1
+ip vrf forwarding VPN_B
+ip address 195.12.2.5 255.255.255.252
+!
+router rip
+version 2
+!
+address-family ipv4 vrf VPN_A
+version 2
+redistribute bgp 1 metric 1
+network 10.0.0.0
+no auto-summary
+exit-address-family
+!
+address-family ipv4 vrf VPN_B
+version 2
+redistribute bgp 1 metric 1
+network 195.12.2.0
+no auto-summary
+exit-address-family
+!
+router bgp 1
+no bgp default ipv4-unicast
+neighbor 194.22.15.3 remote-as 1
+neighbor 194.22.15.3 update-source loopback0
+neighbor 194.22.15.3 activate
+neighbor 194.22.15.1 remote-as 1
+neighbor 194.22.15.1 update-source loopback0
+!
+address-family ipv4 vrf VPN_A
+redistribute rip metric 1
+no auto-summary
+no synchronization
+exit-address-family
+!
+address-family ipv4 vrf VPN_B
+redistribute rip metric 1
+no auto-summary
+no synchronization
+exit-address-family
+!
+neighbor 194.22.15.3 activate
+neighbor 194.22.15.3 send-community extended
+neighbor 194.22.15.1 activate
+neighbor 194.22.15.1 send-community extended
+exit-address-family
+```
+## Prefix补充
+
+- 一：基本规则
+  - 前缀列表用于对路由的匹配和过滤，既能限制前缀的范围，又能限制掩码的范围。
+  - 前缀列表的格式：Ip prefix-list A permit a.a.a.a/length ge le
+  - Length、ge、le的格则如下：
+  - ① length与掩码无关，指的是前length位固定；
+  - ② ge指的是掩码的最小长度；
+  - ③ le 指的是掩码的最大长度。
+  - 举例① ：
+  - 下面这四条路由：
+  - 192.168.12.0/24
+  - 192.168.13.0/24
+  - 192.168.14.0/24
+  - 192.168.15.0/24
+  - 写成二进制的形式：
+  - 192.168.00001100.0/24
+  - 192.168.00001101.0/24
+  - 192.168.00001110.0/24
+  - 192.168.00001111.0/24
+  -
+  - 192.168.00001100.0/24
+  - 你会发现，这四条路由的前22bits是固定的，因此Length = 22，掩码长度 = 24。
+  - 前缀列表可以这样写，匹配上述四条明细路由：
+  - Ip prefix-list A permit 192.168.12.0/22 ge 24 le 24
+  - 前缀192.168.12/22,子网掩码为24位
+  - 举例② ：
+  - 下面这条前缀列表，可以匹配哪些明细路由？
+  - Ip prefix-list B permit 192.168.12.0/22 ge 24 le 25
+  - 192.168.12.0/22  指的是前22bits固定，不能变，即：
+  - 192.168.00001100.00000000/22 
+  - 而ge=24，le=25，掩码长度最小24，最大25，也就是说，掩码有2种取值：
+  -  
+  - 当掩码为24的时候，前22bits固定，此时有四种变化：
+  - 192.168.00001100.0/24  192.168.12.0/24
+  - 192.168.00001101.0/24  192.168.13.0/24
+  - 192.168.00001110.0/24  192.168.14.0/24
+  - 192.168.00001111.0/24  192.168.15.0/24
+  -  
+  - 当掩码为25的时候，前22bits固定，此时有八种变化：
+  - 192.168.00001100.00000000/25  192.168.12.0/25
+  - 192.168.00001100.10000000/25  192.168.12.128/25
+  - 192.168.00001101.00000000/25  192.168.13.0/25
+  - 192.168.00001101.10000000/25  192.168.13.128/25
+  - 192.168.00001110.00000000/25  192.168.14.0/25
+  - 192.168.00001110.10000000/25  192.168.14.128/25
+  - 192.168.00001111.00000000/25  192.168.15.0/25
+  - 192.168.00001111.10000000/25  192.168.15.128/25
+  - 从上面的分析过程，可以看出该前缀列表匹配了12条明细路由。
+- 二：验证前缀列表是否精确匹配
+  - 分为两种情况：
+  - ① 若ge = le，设 m = ge/le - length，则匹路由条目数 = 2m；
+  - ② 若ge < le\>，设 m = ge - length , n = le - length，则匹配的路由条目数 = 2m + 2m+1 + … + 2n。
+- 三：前缀列表缺少ge、le时，掩码的取值
+  - ① 没有ge、le，掩码 = length；
+  - ② 没有le，le = 32；
+  - ③ 没有ge，ge = length。
+- 四：举例如下：
+  - A类：0xxxxxxx.y.y.y
+  - Ip prefix-list A permit 0.0.0.0/1 le 32         A类的所有路由
+  - Ip prefix-list A permit 0.0.0.0/0               表示默认路由
+  - Ip prefix-list A permit 0.0.0.0/0 le 32         所有路由
+  - Ip prefix-list A permit 0.0.0.0/0 ge 1          除默认路由其他所有路由
+  - Ip prefix-list A permit 0.0.0.0/0 ge 8 le 8     A类的主类路由
+  - B类：10xxxxxx.
+  - Ip prefix-list B permit 128.0.0.0/2 le 32       B类的所有路由
+  - C类：110xxxxx
+  - Ip prefix-list C permit 192.0.0.0/3 le 32       C类的所有路由
+  - 在前缀列表中，比特位必须是连续的，并且从左边开始
+  - ip prefix-list fuck permit 0.0.0.0/0 ge 1            表示除了默认路由外的所有路由
+  - ip prefix-list test16 seq 5 permit 0.0.0.0/1 ge 8 le 8                配置A类地址
+  - ip prefix-list test16 seq 10 permit 128.0.0.0/2 ge 16 le 16      配置B类地址
+  - ip prefix-list test16 seq 15 permit 192.0.0.0/3 ge 24 le 24      配置C类地址
+- 
+- 怎么理解这里的“1/2/3”需要匹配的前缀呢？
+  - 如：
+  - 128=10 00 0000 ， /2  不能表的意思是说(最前面的“10”这两个位不可以变，可以变的是后面剩下的“6个位”、“10 11 1111=191”)而且这里ge/le=16 限定了mask=16(B类地址)。所以地址为：128.0.0.0-191.255.255.255 /16
+  - 192=110 0 0000  ，/3  不能表的意思是说(最前面的“110”这两个位不可以变，可以变的是后面剩下的“5个位”、“110 1 1111=223”)而且这里ge/le=24 限定了mask=24(C类地址) 。所以地址为：192.0.0.0-223.255.255.255 /24 
+  - mask=0    //匹配前面的0位
+  - mask=1    //匹配前面的第一位1
+  - mask=2    //匹配前面的第一位和第二位     以此类推！！！
